@@ -33,6 +33,7 @@ function engine(on: On, models: Record<string, string> = {}) {
   const clock = mock.clock(on, { now: 1_000 })
   const panes = new Set<string>()
   const opened: string[] = []
+  const closed: string[] = []
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__${PLUGIN}__${e.name}` } }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -48,6 +49,7 @@ function engine(on: On, models: Record<string, string> = {}) {
   })
   on('ui.close', ($, e) => {
     panes.delete(e.id)
+    closed.push(e.id)
     return { value: undefined }
   })
   on('ui.panes', () => ({ value: [...panes].map(id => ({ id, title: 'Agents', isShown: true, isFocused: false, isPlaced: true })) }))
@@ -55,7 +57,7 @@ function engine(on: On, models: Record<string, string> = {}) {
     const { Text } = $.ui.resolve(e)
     return <Text key="engine">engine band</Text>
   })
-  return { opened, clock }
+  return { opened, closed, clock }
 }
 
 let spawned = 0
@@ -177,19 +179,62 @@ test('/agents-info opens the panel and closes it again', async ($, on) => {
   expect((await $.command.run(AGENTS_INFO)).text).toBe('Agents panel closed.')
 })
 
-test('the panel opens by itself once per flow: on planned tasks or a savvy worker', async ($, on) => {
+test('the panel opens by itself once per flow, for the first subagent and never for planned tasks', async ($, on) => {
   const { opened } = engine(on)
   const tasks = [{ title: 'write tests', tier: 'light' }]
   await $.tool.call({ tool: PROGRESS, title: 'Port the mod', tasks })
   await $.tool.call({ tool: PROGRESS, tasks })
-  await spawn($, 'write tests', 'savvy-light')
-  expect(opened).toEqual([PANE_ID])
+  expect(opened).toEqual([])
 
   await spawn($, 'scan models', 'Explore')
   expect(opened).toEqual([PANE_ID])
+  await spawn($, 'write tests', 'savvy-light')
+  expect(opened).toEqual([PANE_ID])
 
   await $.tool.call({ tool: PROGRESS, title: 'Next flow', tasks })
+  await spawn($, 'write module', 'savvy-careful')
   expect(opened).toEqual([PANE_ID, PANE_ID])
+})
+
+test('the panel closes once no subagent is left, and opens again for the next one', async ($, on) => {
+  const { opened, closed } = engine(on)
+  await $.tool.call({ tool: PROGRESS, title: 'First plan', total: 1 })
+  await spawn($, 'scan models')
+  expect(opened).toEqual([PANE_ID])
+  await finish($, 'agent-scan models', usage('claude-opus-5-5', 1_000))
+
+  await $.tool.call({ tool: PROGRESS, title: 'Second plan', total: 1 })
+  expect(closed).toEqual([PANE_ID])
+
+  await spawn($, 'next job')
+  expect(opened).toEqual([PANE_ID, PANE_ID])
+})
+
+test('a panel opened by hand stays open when a plan starts with no subagents', async ($, on) => {
+  const { closed } = engine(on)
+  await $.command.run(AGENTS_INFO)
+  await $.tool.call({ tool: PROGRESS, title: 'First plan', total: 1 })
+  await $.tool.call({ tool: PROGRESS, title: 'Second plan', total: 1 })
+  expect(closed).toEqual([])
+})
+
+test('Collapse folds the panel to its icons and Expand brings the rows back', async ($, on) => {
+  engine(on)
+  await spawn($, 'scan models')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  const toggle = async () => String((await ui.find({ key: 'compact' }))?.props.label)
+  expect(await toggle()).toBe('Collapse')
+  expect((await ui.find({ type: 'Text', text: /Running/ }))?.text).toBe('Running · 1')
+
+  await ui.press({ key: 'compact' })
+  await ui.redraw()
+  expect(await toggle()).toBe('Expand')
+  expect(await ui.find({ type: 'Text', text: /Running/ })).toBeUndefined()
+
+  await ui.press({ key: 'compact' })
+  await ui.redraw()
+  expect((await ui.find({ type: 'Text', text: /Running/ }))?.text).toBe('Running · 1')
+  await ui.unmount()
 })
 
 test('planned tasks show until a run with the same description starts', async ($, on) => {

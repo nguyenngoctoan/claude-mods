@@ -659,6 +659,14 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
   void $.ui.open({ id: PANE, title: tr().pane })
 }
 
+// A pane the plugin opened for subagents closes when none is left, and the next one opens it
+// again; a pane the person opened by hand (`autoOpenedFor` empty) stays.
+async function closeIfEmpty($: EngineInterface): Promise<void> {
+  if ((await read($, agents)).length || !(await read($, panel)).autoOpenedFor) return
+  await update($, panel, prev => ({ ...prev, autoOpenedFor: '' }))
+  if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -745,9 +753,9 @@ export const register: Register = (on, options) => {
       // A new flow starts with a clean list; agents still running stay.
       await update($, agents, list => list.filter(a => a.status === 'running'))
       await update($, stats, s => ({ ...s, tokens: 0, cached: 0, prompt: 0 }))
+      await closeIfEmpty($)
     }
     const next = await update($, flow, p => merge(p, input))
-    if (next && input.tasks?.length) await autoOpen($, next.title)
     return { result: `ok: ${label(next ?? blank())}` }
   })
 
@@ -820,10 +828,8 @@ export const register: Register = (on, options) => {
       return [...list.filter(a => a.id !== run.id), run].slice(-200)
     })
     await update($, now, () => at)
-    if (e.subagentType.startsWith('savvy-')) {
-      const f = await read($, flow)
-      await autoOpen($, f && !f.isFinished ? f.title : 'savvy-flow')
-    }
+    const f = await read($, flow)
+    await autoOpen($, f && !f.isFinished ? f.title : 'savvy-flow')
     return started
   })
 
@@ -1024,15 +1030,17 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" justifyContent="space-between">
+        {title ? (
           <Text bold wrap="truncate-end">
             {title}
           </Text>
+        ) : null}
+        <Box flexDirection="row" gap={2}>
+          <Text dimColor>
+            ≈{fmtCost(t.cost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
+          </Text>
           {toggleCompact}
         </Box>
-        <Text dimColor>
-          ≈{fmtCost(t.cost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
-        </Text>
         {p.isCompact ? (
           <Text wrap="truncate-end">
             {[...running, ...finished].map(a => (
