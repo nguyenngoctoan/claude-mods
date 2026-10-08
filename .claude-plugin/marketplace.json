@@ -1,0 +1,6 @@
+{
+  "name": "claude-mods",
+  "description": "Toan's Claude Code mods",
+  "owner": { "name": "Toan Nguyen" },
+  "plugins": [{ "name": "agent-progress", "source": "./agent-progress" }]
+}
