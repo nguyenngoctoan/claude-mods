@@ -772,6 +772,9 @@ export const register: Register = (on, options) => {
     const type = String(e.subagent_type ?? '')
     if (!type.startsWith('savvy-')) return next(e)
 
+    // A launch after a finished or cleared flow starts a new one: the count starts over too.
+    const before = await read($, flow)
+    if (!before || before.isFinished) await update($, stats, s => ({ ...s, tokens: 0, cached: 0, prompt: 0 }))
     await update($, flow, prev => {
       const base = prev && !prev.isFinished ? { ...blank(), ...prev } : blank()
       return { ...base, running: base.running + 1, phase: base.phase === 'plan' ? 'delegate' : base.phase }
@@ -781,6 +784,15 @@ export const register: Register = (on, options) => {
     } finally {
       await update($, flow, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev))
     }
+  })
+
+  // A finished flow's bar goes with the person's next prompt; the next plan draws a new one.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') {
+      const f = await read($, flow)
+      if (f?.isFinished) await update($, flow, () => null)
+    }
+    return next(e)
   })
 
   on('agent.spawn', async ($, e, next) => {
@@ -821,7 +833,9 @@ export const register: Register = (on, options) => {
     const result = yield* next(e)
     const agentId = e.agentId
     const usage = result.usage
-    if (usage) {
+    // The count belongs to the open flow: a finished flow keeps what it used.
+    const open = await read($, flow)
+    if (usage && open && !open.isFinished) {
       // A request's wall time includes the wait for its first token, so the speed reads a little low.
       const ms = (await $.clock.now()) - t0
       const prompt = usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens

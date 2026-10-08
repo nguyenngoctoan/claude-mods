@@ -39,6 +39,7 @@ function engine(on: On, models: Record<string, string> = {}) {
   on('settings.read', () => ({ value: {} }))
   on('agent.spawn', ($, e) => ({ model: models[e.description] ?? 'claude-opus-5-5', agentId: `agent-${e.description}` }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('prompt.submit', ($, e) => ({ text: e.text }))
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'completed' } as never }))
   on('ui.open', ($, e) => {
     panes.add(e.id)
@@ -370,4 +371,61 @@ test('the bar shows the cache hit: prompt tokens read from the cache over all pr
   await $.tool.call({ tool: PROGRESS, title: 'Cold plan', total: 2, done: 0, phase: 'delegate' })
   await request($)
   expect(await text()).toBe('1k tok · 100 tps')
+})
+
+// The band's first line of text on the terminal: the flow's title, or the engine's own band.
+async function shown($: Engine) {
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND })
+  const found = (await band.find({ type: 'Text', text: /engine band|Short plan|Open plan|savvy-flow/ }))?.text
+  await band.unmount()
+  return found
+}
+
+test('a finished flow keeps the tokens it used: later requests are not counted', async ($, on) => {
+  const { clock } = engine(on)
+  requests(on, clock, [
+    [usage('claude-opus-5-5', 4_000, 200), 2_000],
+    [usage('claude-opus-5-5', 5_000), 500],
+  ])
+  await $.tool.call({ tool: PROGRESS, title: 'Short plan', total: 1, done: 0, phase: 'delegate' })
+  await request($)
+  await $.tool.call({ tool: PROGRESS, done: 1, finished: true })
+  await request($)
+
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND })
+  expect((await band.find({ type: 'Text', text: /tok/ }))?.text).toBe('4k tok · 100 tps')
+  await band.unmount()
+})
+
+test("the person's next prompt clears a finished bar, and an open plan or a notification leaves it", async ($, on) => {
+  engine(on)
+  const submit = (kind: 'composer' | 'task-notification') => $.prompt.submit({ text: 'next', wait: false, origin: { kind } })
+  await $.tool.call({ tool: PROGRESS, title: 'Open plan', total: 2, done: 0, phase: 'delegate' })
+
+  await submit('composer')
+  expect(await shown($)).toBe('Open plan')
+
+  await $.tool.call({ tool: PROGRESS, done: 2, finished: true })
+  await submit('task-notification')
+  expect(await shown($)).toBe('Open plan')
+
+  await submit('composer')
+  expect(await shown($)).toBe('engine band')
+})
+
+test('a savvy worker launched after a finished flow starts the token count over', async ($, on) => {
+  const { clock } = engine(on)
+  requests(on, clock, [
+    [usage('claude-opus-5-5', 4_000, 200), 2_000],
+    [usage('claude-opus-5-5', 1_000), 500],
+  ])
+  await $.tool.call({ tool: PROGRESS, title: 'Short plan', total: 1, done: 0, phase: 'delegate' })
+  await request($)
+  await $.tool.call({ tool: PROGRESS, done: 1, finished: true })
+  await $.tool.call({ tool: 'Agent', subagent_type: 'savvy-light', description: 'fix lint', prompt: 'p' })
+  await request($)
+
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND })
+  expect((await band.find({ type: 'Text', text: /tok/ }))?.text).toBe('1k tok · 100 tps')
+  await band.unmount()
 })

@@ -41,9 +41,9 @@ export type AgentRun = {
 }
 
 /**
- * Tokens used since the current flow began (every model request, subagents included),
- * the latest request's output speed, and the cache hit: prompt tokens read from the
- * cache (`cached`) out of all prompt tokens (`prompt`).
+ * Tokens used while the current flow was open (every model request, subagents included;
+ * a finished flow stops counting), the latest request's output speed, and the cache hit:
+ * prompt tokens read from the cache (`cached`) out of all prompt tokens (`prompt`).
  */
 export type Stats = {
   tokens: number
