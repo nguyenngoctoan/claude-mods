@@ -639,6 +639,16 @@ const ctxBar = (pct: number, width: number): string => {
 
 const STATUS_GLYPH: Record<string, string> = { running: '●', done: '✓', failed: '✗', planned: '◷' }
 
+// The terminal has no Svg, so running work spins a braille frame per tick
+// instead; `animations: off` keeps the still glyphs.
+const TICK_MS = 500
+const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+let isAnimated = true
+const spinAt = (at: number, offset = 0): string => SPIN[(Math.floor(at / TICK_MS) + offset) % SPIN.length] ?? '●'
+const offsetOf = (id: string): number => [...id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0)
+const glyphOf = (a: AgentRun, at: number): string =>
+  isAnimated && a.status === 'running' ? spinAt(at, offsetOf(a.id)) : (STATUS_GLYPH[a.status] ?? '')
+
 // Opens the agents pane, or closes it when it is up; true when it ends up open.
 async function togglePane($: EngineInterface): Promise<boolean> {
   const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
@@ -668,6 +678,7 @@ async function closeIfEmpty($: EngineInterface): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
+  isAnimated = options.animations !== 'off'
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     lang = await detectLang($, options.language)
@@ -729,14 +740,12 @@ export const register: Register = (on, options) => {
       description: 'Show or hide the panel of subagents: running, finished and planned, with model, context, cost and time',
     })
 
-    // Ticks the running agents' clocks; quiet when nothing runs.
-    $.clock.every(1000, () => {
-      void (async () => {
-        const list = await read($, agents)
-        if (!list.some(a => a.status === 'running')) return
-        const at = await $.clock.now()
-        await update($, now, () => at)
-      })()
+    // Ticks the running agents' clocks and the terminal's spinner frames; quiet when nothing runs.
+    $.clock.every(TICK_MS, async () => {
+      const list = await read($, agents)
+      if (!list.some(a => a.status === 'running')) return
+      const at = await $.clock.now()
+      await update($, now, () => at)
     })
     return started
   })
@@ -965,7 +974,13 @@ export const register: Register = (on, options) => {
       if (p.isCompact) {
         return (
           <Box flexDirection="column" gap={1}>
-            <Svg source={compactSvg(W, list, planned, t)} alt={`${list.length} ${s.agentsCount}, ${summary}`} width={W} height={32} />
+            <Svg
+              source={compactSvg(W, list, planned, t)}
+              alt={`${list.length} ${s.agentsCount}, ${summary}`}
+              width={W}
+              height={32}
+              isInteractive={isAnimated && running.length > 0 ? true : undefined}
+            />
             {toggleCompact}
           </Box>
         )
@@ -977,7 +992,14 @@ export const register: Register = (on, options) => {
           {isEmpty && <Text dimColor>{s.empty}</Text>}
           {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
           {running.map(a => (
-            <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />
+            <Svg
+              key={a.id}
+              source={agentSvg(W, a, at)}
+              alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`}
+              width={W}
+              height={66}
+              isInteractive={isAnimated || undefined}
+            />
           ))}
           {finished.length > 0 && toggleDone}
           {!p.isDoneCollapsed &&
@@ -1009,7 +1031,7 @@ export const register: Register = (on, options) => {
             <Text bold wrap="truncate-end">
               {a.description || a.type}
             </Text>
-            <Text color={a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : color}>{STATUS_GLYPH[a.status]}</Text>
+            <Text color={a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : color}>{glyphOf(a, at)}</Text>
           </Box>
           <Text dimColor wrap="truncate-end">
             {'  '}
@@ -1045,7 +1067,7 @@ export const register: Register = (on, options) => {
           <Text wrap="truncate-end">
             {[...running, ...finished].map(a => (
               <Text key={a.id} color={colorOf(tierOf(a.type))}>
-                {STATUS_GLYPH[a.status]}{' '}
+                {glyphOf(a, at)}{' '}
               </Text>
             ))}
             {planned.map(pl => (
@@ -1092,6 +1114,8 @@ export const register: Register = (on, options) => {
     const list = await read($, agents)
     const crew = list.length + plannedOf(f, list).length
     const isWorking = list.some(a => a.status === 'running')
+    const at = await read($, now)
+    const dot = isAnimated && isWorking && !f.isFinished ? spinAt(at) : '●'
     const crewButton = (
       <Button key="savvy-agents" label={`×${crew}`} plain onPress={() => void togglePane($)} />
     )
@@ -1107,7 +1131,7 @@ export const register: Register = (on, options) => {
       />
     )
 
-    // The terminal's table carries `Svg` too but draws it empty: ask the surface.
+    // The terminal has no `Svg` (it spins text frames instead): ask the surface.
     if (e.surface !== 'terminal' && 'Svg' in ui) {
       const { Svg } = ui
       // About 8 CSS px per reported column; the rest is the count, the dismiss
@@ -1115,7 +1139,13 @@ export const register: Register = (on, options) => {
       const width = Math.max(180, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 96))
       return (
         <Box flexDirection="row" alignItems="center" gap={1}>
-          <Svg source={rowSvg(f, width, isWorking, used)} alt={`${f.title}: ${label(f)}, ${percent}${used && `, ${used}`}`} width={width} height={H} />
+          <Svg
+            source={rowSvg(f, width, isWorking, used)}
+            alt={`${f.title}: ${label(f)}, ${percent}${used && `, ${used}`}`}
+            width={width}
+            height={H}
+            isInteractive={isAnimated || undefined}
+          />
           {crewButton}
           {dismiss}
         </Box>
@@ -1128,7 +1158,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="row" gap={2}>
         <Box width={titleW} flexShrink={0}>
-          <Text color={f.isFinished ? DONE : ACCENT}>● </Text>
+          <Text color={f.isFinished ? DONE : ACCENT}>{dot} </Text>
           <Text wrap="truncate-end">{f.title}</Text>
         </Box>
         <Text color={f.isFinished ? DONE : ACCENT}>{barText(f, width)}</Text>

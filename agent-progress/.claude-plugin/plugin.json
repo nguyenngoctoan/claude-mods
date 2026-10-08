@@ -1,8 +1,10 @@
 {
   "name": "agent-progress",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Progress bar above the prompt for /savvy-flow or any delegated plan, plus an agents panel (/agents-info): running, finished and planned subagents with model, task progress, context, cost and time. Based on johnnyvizz/claude-kit savvy-progress.",
-  "author": { "name": "Toan Nguyen" },
+  "author": {
+    "name": "Toan Nguyen"
+  },
   "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
@@ -14,6 +16,16 @@
         "auto",
         "en",
         "ru"
+      ]
+    },
+    "animations": {
+      "type": "string",
+      "title": "Animations",
+      "description": "on animates the crabs and the bar on desktop and spins running work in the terminal; off keeps them still",
+      "default": "on",
+      "options": [
+        "on",
+        "off"
       ]
     }
   },

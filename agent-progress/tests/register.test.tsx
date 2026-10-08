@@ -474,3 +474,67 @@ test('a savvy worker launched after a finished flow starts the token count over'
   expect((await band.find({ type: 'Text', text: /tok/ }))?.text).toBe('1k tok · 100 tps')
   await band.unmount()
 })
+
+test('the desktop plays its animations: moving SVGs are interactive, finished ones stay images', async ($, on) => {
+  engine(on)
+  await $.tool.call({ tool: PROGRESS, title: 'Port the mod', total: 2, done: 0, phase: 'delegate' })
+  await spawn($, 'scan models')
+
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
+  expect((await band.findAll({ type: 'Svg' })).map(s => s.props.isInteractive)).toEqual([true])
+  await band.unmount()
+
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  const running = (await pane.findAll({ type: 'Svg' })).find(s => String(s.props.alt).startsWith('scan models'))
+  expect(running?.props.isInteractive).toBe(true)
+  await pane.unmount()
+
+  await $.turn.complete({
+    agentId: 'agent-scan models',
+    reason: 'answer',
+    answer: 'done',
+    durationMs: 1_000,
+    isAborted: false,
+    turnId: 't1',
+    usage: usage('claude-opus-5-5', 10),
+  })
+  const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  const finished = (await after.findAll({ type: 'Svg' })).find(s => String(s.props.alt).startsWith('scan models'))
+  expect(finished?.props.isInteractive).toBeUndefined()
+  await after.unmount()
+})
+
+test('the terminal animates running work frame by frame', async ($, on) => {
+  const { clock } = engine(on)
+  mock.env(on, {})
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: PROGRESS, title: 'Port the mod', total: 2, done: 1, phase: 'delegate' })
+  await spawn($, 'scan models')
+
+  const glyphs = async () => {
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+    const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND })
+    const spin = await pane.find({ text: /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]$/ })
+    const dot = await band.find({ text: /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] $/ })
+    await pane.unmount()
+    await band.unmount()
+    return [spin?.text ?? '', dot?.text ?? '']
+  }
+  const first = await glyphs()
+  expect(first[0]).not.toBe('')
+  expect(first[1]).not.toBe('')
+  await clock.advance(500)
+  const second = await glyphs()
+  expect(second[0]).not.toBe(first[0])
+  expect(second[1]).not.toBe(first[1])
+})
+
+test('animations off keeps the terminal still', { options: { animations: 'off' } }, async ($, on) => {
+  engine(on)
+  mock.env(on, {})
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await spawn($, 'scan models')
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  expect(await pane.find({ text: '●' })).toBeDefined()
+  await pane.unmount()
+})
